@@ -1,0 +1,21 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# PyInstaller / Compilation outputs
+build/
+dist/
+*.spec
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Editor/OS settings
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
