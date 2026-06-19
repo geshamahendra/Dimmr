@@ -46,6 +46,7 @@ DEFAULT_CONFIG = {
     ],
     "schedule_enabled": True,
     "autostart": False,
+    "notifications_enabled": True,
 }
 
 def load_config():
@@ -186,15 +187,30 @@ class DimmrApp:
         self.root.title("Dimmr")
 
         self.overlay_mgr = OverlayManager(self.root)
-        self.overlay_mgr.set_brightness(self.config["brightness"])
-        self.overlay_mgr.set_enabled(self.config["enabled"])
+        
+        if self.config["enabled"] and self.config["schedule_enabled"]:
+            self._check_and_apply_current_schedule(init_call=True)
+        else:
+            self.overlay_mgr.set_brightness(self.config["brightness"])
+            self.overlay_mgr.set_enabled(self.config["enabled"])
 
         self._tray = None
         self._build_tray()
+        
+        self._send_notification("Dimmr is Active", f"Running at {self.config['brightness']}% brightness")
 
         threading.Thread(target=self._schedule_loop, daemon=True).start()
         self.root.after(100, self._tk_loop)
         self.root.mainloop()
+
+    # ── Notification Helper ───────────────────────────────────────────────────
+    
+    def _send_notification(self, title, message):
+        if self.config.get("notifications_enabled", True) and self._tray:
+            try:
+                self._tray.notify(message, title)
+            except Exception as e:
+                print(f"[notification] {e}")
 
     # ── Tray ─────────────────────────────────────────────────────────────────
 
@@ -203,6 +219,7 @@ class DimmrApp:
         def make_brightness_action(v):
             def action(icon, item):
                 self._set_brightness(v)
+                self._send_notification("Brightness Changed", f"Manually set to {v}%")
             return action
 
         def make_brightness_check(v):
@@ -221,16 +238,33 @@ class DimmrApp:
         def toggle_enabled(icon, item):
             self.config["enabled"] = not self.config["enabled"]
             self.overlay_mgr.set_enabled(self.config["enabled"])
+            
+            if self.config["enabled"]:
+                if self.config["schedule_enabled"]:
+                    self._check_and_apply_current_schedule()
+                self._send_notification("Dimmr Enabled", f"Dimmer activated ({self.config['brightness']}%)")
+            else:
+                self._send_notification("Dimmr Disabled", "Dimmer deactivated (Normal screen)")
+                
             save_config(self.config)
 
         def toggle_schedule(icon, item):
             self.config["schedule_enabled"] = not self.config["schedule_enabled"]
+            if self.config["schedule_enabled"] and self.config["enabled"]:
+                self._check_and_apply_current_schedule()
+                self._send_notification("Auto Schedule", f"Synchronized to {self.config['brightness']}% brightness")
             save_config(self.config)
 
         def toggle_autostart(icon, item):
             self.config["autostart"] = not self.config["autostart"]
             set_autostart(self.config["autostart"])
             save_config(self.config)
+
+        def toggle_notifications(icon, item):
+            self.config["notifications_enabled"] = not self.config["notifications_enabled"]
+            save_config(self.config)
+            if self.config["notifications_enabled"]:
+                self._send_notification("Notifications Enabled", "You will now receive alerts from Dimmr.")
 
         def open_editor(icon, item):
             self.root.after(0, self._open_schedule_editor)
@@ -261,6 +295,8 @@ class DimmrApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Run at Windows startup", toggle_autostart,
                              checked=lambda item: self.config["autostart"]),
+            pystray.MenuItem("Show Notifications", toggle_notifications,
+                             checked=lambda item: self.config.get("notifications_enabled", True)),
             pystray.MenuItem("Refresh monitors", refresh_mon),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", quit_app),
@@ -281,13 +317,39 @@ class DimmrApp:
         if self._tray:
             self._tray.icon = make_tray_icon(value)
 
-    # ── Schedule loop ─────────────────────────────────────────────────────────
+    # ── Schedule Logic ────────────────────────────────────────────────────────
+
+    def _check_and_apply_current_schedule(self, init_call=False):
+        schedules = self.config.get("schedules", [])
+        if not schedules:
+            return
+
+        now = datetime.now()
+        now_minutes = now.hour * 60 + now.minute
+        sorted_scheds = sorted(schedules, key=lambda x: x["hour"] * 60 + x["minute"])
+        
+        target_brightness = None
+
+        for sched in sorted_scheds:
+            sched_minutes = sched["hour"] * 60 + sched["minute"]
+            if sched_minutes <= now_minutes:
+                target_brightness = sched["brightness"]
+        
+        if target_brightness is None:
+            target_brightness = sorted_scheds[-1]["brightness"]
+
+        if init_call:
+            self.config["brightness"] = target_brightness
+            self.overlay_mgr.set_brightness(target_brightness)
+            self.overlay_mgr.set_enabled(self.config["enabled"])
+        else:
+            self.root.after(0, lambda: self._set_brightness(target_brightness))
 
     def _schedule_loop(self):
         last_triggered = None
         while True:
             time.sleep(20)
-            if not self.config.get("schedule_enabled"):
+            if not self.config.get("schedule_enabled") or not self.config.get("enabled"):
                 continue
             now = datetime.now()
             key = (now.hour, now.minute)
@@ -297,6 +359,7 @@ class DimmrApp:
                 if (sched["hour"], sched["minute"]) == key:
                     last_triggered = key
                     self.root.after(0, lambda b=sched["brightness"]: self._set_brightness(b))
+                    self._send_notification("Schedule Triggered", f"Automatically set to {sched['brightness']}% brightness")
                     break
 
     # ── Schedule editor ───────────────────────────────────────────────────────
@@ -304,7 +367,7 @@ class DimmrApp:
     def _open_schedule_editor(self):
         win = tk.Toplevel(self.root)
         win.title("Schedule Editor — Dimmr")
-        win.geometry("500x460")          # lebih besar
+        win.geometry("500x460")
         win.resizable(False, False)
         win.configure(bg="#1e1e1e")
         win.attributes("-topmost", True)
@@ -375,6 +438,10 @@ class DimmrApp:
             self.config["schedules"] = sorted(
                 new_scheds, key=lambda x: (x["hour"], x["minute"]))
             save_config(self.config)
+            
+            if self.config["schedule_enabled"] and self.config["enabled"]:
+                self._check_and_apply_current_schedule()
+                
             win.destroy()
 
         btn_frame = tk.Frame(win, bg=bg)
