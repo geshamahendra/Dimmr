@@ -18,7 +18,7 @@
 
 #### Option 1: Use the Pre-compiled Executable (Easiest)
 If you just want to run the program without installing Python:
-1. Go to the **Releases** section (or the `dist/` folder) and download `Dimmr.exe`.
+1. Go to  the `dist/` folder and download `Dimmr.exe`.
 2. Double-click `Dimmr.exe` to launch it. It will sit quietly in your system tray (bottom-right corner).
 
 **To make it run automatically at Windows startup:**
