@@ -185,6 +185,8 @@ class DimmrApp:
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.title("Dimmr")
+        self.root.protocol("WM_DISPLAYCHANGE", self._on_display_change)
+        self.root.bind("<Configure>", lambda e: self._on_display_change())
 
         self.overlay_mgr = OverlayManager(self.root)
         
@@ -202,6 +204,14 @@ class DimmrApp:
         threading.Thread(target=self._schedule_loop, daemon=True).start()
         self.root.after(100, self._tk_loop)
         self.root.mainloop()
+
+    # ── Display Check ─────────────────────────────────────────────────────────
+
+    def _on_display_change(self):
+        if hasattr(self, '_display_change_timer') and self._display_change_timer:
+            self.root.after_cancel(self._display_change_timer)
+
+        self._display_change_timer = self.root.after(500, self.overlay_mgr.refresh_monitors)
 
     # ── Notification Helper ───────────────────────────────────────────────────
     
