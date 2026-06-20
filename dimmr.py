@@ -228,8 +228,7 @@ class DimmrApp:
 
         def make_brightness_action(v):
             def action(icon, item):
-                self._set_brightness(v)
-                self._send_notification("Brightness Changed", f"Manually set to {v}%")
+                self._set_brightness(v) 
             return action
 
         def make_brightness_check(v):
@@ -318,14 +317,19 @@ class DimmrApp:
         self._tray = pystray.Icon("Dimmr", icon_img, "Dimmr", menu)
         threading.Thread(target=self._tray.run, daemon=True).start()
 
-    # ── Brightness ────────────────────────────────────────────────────────────
+    # ── Brightness Core ───────────────────────────────────────────────────────
 
-    def _set_brightness(self, value: int):
+    def _set_brightness(self, value: int, trigger_notification=False, notif_title="Brightness Updated", notif_msg=""):
         self.config["brightness"] = value
         self.overlay_mgr.set_brightness(value)
         save_config(self.config)
+        
         if self._tray:
             self._tray.icon = make_tray_icon(value)
+            
+        if trigger_notification and self.config.get("notifications_enabled", True):
+            msg = notif_msg if notif_msg else f"Screen adjusted to {value}%"
+            self._send_notification(notif_title, msg)
 
     # ── Schedule Logic ────────────────────────────────────────────────────────
 
@@ -355,21 +359,62 @@ class DimmrApp:
         else:
             self.root.after(0, lambda: self._set_brightness(target_brightness))
 
+    # ── Schedule Logic ────────────────────────────────────────────────────────
+
+    def _check_and_apply_current_schedule(self, init_call=False):
+        schedules = self.config.get("schedules", [])
+        if not schedules:
+            return
+
+        now = datetime.now()
+        now_minutes = now.hour * 60 + now.minute
+        sorted_scheds = sorted(schedules, key=lambda x: x["hour"] * 60 + x["minute"])
+        
+        target_brightness = None
+        for sched in sorted_scheds:
+            sched_minutes = sched["hour"] * 60 + sched["minute"]
+            if sched_minutes <= now_minutes:
+                target_brightness = sched["brightness"]
+        
+        if target_brightness is None:
+            target_brightness = sorted_scheds[-1]["brightness"]
+
+        if init_call:
+            self.config["brightness"] = target_brightness
+            self.overlay_mgr.set_brightness(target_brightness)
+            self.overlay_mgr.set_enabled(self.config["enabled"])
+        else:
+            # Picu dengan notifikasi saat dipanggil otomatis pasca-login atau aktifkan auto-schedule
+            self.root.after(0, lambda: self._set_brightness(
+                target_brightness, 
+                trigger_notification=True, 
+                notif_title="Dimmr Sync", 
+                notif_msg=f"Synchronized to scheduled {target_brightness}% brightness."
+            ))
+
     def _schedule_loop(self):
         last_triggered = None
         while True:
-            time.sleep(20)
+            time.sleep(10)  # Cek setiap 10 detik agar lebih responsif tepat di pergantian menit
             if not self.config.get("schedule_enabled") or not self.config.get("enabled"):
                 continue
+                
             now = datetime.now()
             key = (now.hour, now.minute)
+            
             if key == last_triggered:
                 continue
+                
             for sched in self.config.get("schedules", []):
                 if (sched["hour"], sched["minute"]) == key:
                     last_triggered = key
-                    self.root.after(0, lambda b=sched["brightness"]: self._set_brightness(b))
-                    self._send_notification("Schedule Triggered", f"Automatically set to {sched['brightness']}% brightness")
+                    # Jalankan di thread utama Tkinter dengan notifikasi menyala
+                    self.root.after(0, lambda b=sched["brightness"]: self._set_brightness(
+                        b, 
+                        trigger_notification=True, 
+                        notif_title="Schedule Triggered", 
+                        notif_msg=f"Automatically dimmed to {b}%."
+                    ))
                     break
 
     # ── Schedule editor ───────────────────────────────────────────────────────
